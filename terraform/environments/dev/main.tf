@@ -25,12 +25,8 @@ module "storage" {
 }
 
 module "identity" {
-  source                 = "../../modules/identity"
-  environment            = var.environment
-  documents_bucket_arn   = module.storage.documents_bucket_arn
-  kms_key_arn            = module.storage.kms_key_arn
-  application_secret_arn = module.storage.application_secret_arn
-  tags                   = local.common_tags
+  source                = "../../modules/identity"
+  instance_profile_name = "LabInstanceProfile"
 }
 
 module "monitoring" {
@@ -44,10 +40,8 @@ module "monitoring" {
 }
 
 module "incident_response" {
-  source                  = "../../modules/incident-response"
-  environment             = var.environment
-  security_log_group_name = module.monitoring.security_log_group_name
-  security_log_group_arn  = module.monitoring.security_log_group_arn
-  log_retention_days      = var.log_retention_days
-  tags                    = local.common_tags
+  source             = "../../modules/incident-response"
+  environment        = var.environment
+  log_retention_days = var.log_retention_days
+  tags               = local.common_tags
 }

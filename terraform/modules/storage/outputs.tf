@@ -7,19 +7,19 @@ output "kms_key_id" {
 }
 
 output "documents_bucket_name" {
-  value = aws_s3_bucket.documents.id
+  value = local.documents_bucket_name
 }
 
 output "documents_bucket_arn" {
-  value = aws_s3_bucket.documents.arn
+  value = local.documents_bucket_arn
 }
 
 output "audit_bucket_name" {
-  value = aws_s3_bucket.audit.id
+  value = local.audit_bucket_name
 }
 
 output "audit_bucket_arn" {
-  value = aws_s3_bucket.audit.arn
+  value = local.audit_bucket_arn
 }
 
 output "application_secret_arn" {

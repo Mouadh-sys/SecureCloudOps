@@ -10,7 +10,7 @@ output "aws_caller_arn" {
 
 output "aws_region" {
   description = "Selected AWS region"
-  value       = data.aws_region.current.name
+  value       = data.aws_region.current.region
 }
 
 output "vpc_id" {

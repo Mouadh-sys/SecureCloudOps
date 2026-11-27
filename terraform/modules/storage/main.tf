@@ -1,7 +1,11 @@
 data "aws_caller_identity" "current" {}
 
 locals {
-  account_id = data.aws_caller_identity.current.account_id
+  account_id            = data.aws_caller_identity.current.account_id
+  documents_bucket_name = "securecloudops-documents-${local.account_id}-${var.environment}"
+  audit_bucket_name     = "securecloudops-audit-${local.account_id}-${var.environment}"
+  documents_bucket_arn  = "arn:aws:s3:::${local.documents_bucket_name}"
+  audit_bucket_arn      = "arn:aws:s3:::${local.audit_bucket_name}"
   common_tags = merge(var.tags, { Module = "storage" })
 }
 
@@ -18,13 +22,8 @@ resource "aws_kms_alias" "data" {
   target_key_id = aws_kms_key.data.key_id
 }
 
-resource "aws_s3_bucket" "documents" {
-  bucket = "securecloudops-documents-${local.account_id}-${var.environment}"
-  tags   = merge(local.common_tags, { Name = "securecloudops-documents" })
-}
-
 resource "aws_s3_bucket_public_access_block" "documents" {
-  bucket                  = aws_s3_bucket.documents.id
+  bucket                  = local.documents_bucket_name
   block_public_acls       = true
   block_public_policy     = true
   ignore_public_acls      = true
@@ -32,14 +31,14 @@ resource "aws_s3_bucket_public_access_block" "documents" {
 }
 
 resource "aws_s3_bucket_versioning" "documents" {
-  bucket = aws_s3_bucket.documents.id
+  bucket = local.documents_bucket_name
   versioning_configuration {
     status = "Enabled"
   }
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "documents" {
-  bucket = aws_s3_bucket.documents.id
+  bucket = local.documents_bucket_name
   rule {
     apply_server_side_encryption_by_default {
       kms_master_key_id = aws_kms_key.data.arn
@@ -50,7 +49,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "documents" {
 }
 
 resource "aws_s3_bucket_lifecycle_configuration" "documents" {
-  bucket = aws_s3_bucket.documents.id
+  bucket = local.documents_bucket_name
 
   rule {
     id     = "archive-old-versions"
@@ -78,7 +77,7 @@ data "aws_iam_policy_document" "documents" {
       identifiers = ["*"]
     }
     actions   = ["s3:*"]
-    resources = [aws_s3_bucket.documents.arn, "${aws_s3_bucket.documents.arn}/*"]
+    resources = [local.documents_bucket_arn, "${local.documents_bucket_arn}/*"]
     condition {
       test     = "Bool"
       variable = "aws:SecureTransport"
@@ -88,19 +87,14 @@ data "aws_iam_policy_document" "documents" {
 }
 
 resource "aws_s3_bucket_policy" "documents" {
-  bucket = aws_s3_bucket.documents.id
+  bucket = local.documents_bucket_name
   policy = data.aws_iam_policy_document.documents.json
 
   depends_on = [aws_s3_bucket_public_access_block.documents]
 }
 
-resource "aws_s3_bucket" "audit" {
-  bucket = "securecloudops-audit-${local.account_id}-${var.environment}"
-  tags   = merge(local.common_tags, { Name = "securecloudops-audit" })
-}
-
 resource "aws_s3_bucket_public_access_block" "audit" {
-  bucket                  = aws_s3_bucket.audit.id
+  bucket                  = local.audit_bucket_name
   block_public_acls       = true
   block_public_policy     = true
   ignore_public_acls      = true
@@ -108,14 +102,14 @@ resource "aws_s3_bucket_public_access_block" "audit" {
 }
 
 resource "aws_s3_bucket_versioning" "audit" {
-  bucket = aws_s3_bucket.audit.id
+  bucket = local.audit_bucket_name
   versioning_configuration {
     status = "Enabled"
   }
 }
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "audit" {
-  bucket = aws_s3_bucket.audit.id
+  bucket = local.audit_bucket_name
   rule {
     apply_server_side_encryption_by_default {
       sse_algorithm = "AES256"

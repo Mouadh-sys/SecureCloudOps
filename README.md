@@ -1,16 +1,17 @@
 # SecureCloudOps
 
-SecureCloudOps is an AWS Academy security engineering project that demonstrates network isolation, least-privilege IAM, encryption, centralized audit logging, security findings, and notification-only incident response using Terraform.
+SecureCloudOps is an AWS Academy security engineering project that demonstrates network isolation, encryption, centralized audit logging, security findings, and notification-only incident response using Terraform adapted to Learner Lab permissions.
 
 ## Architecture
 
 - VPC `10.20.0.0/16` with public, application, and database subnets across two availability zones
 - S3 Gateway Endpoint and no NAT Gateway
-- Private document bucket with KMS encryption, versioning, and public-access blocking
+- Existing document and audit buckets with Terraform-managed security subresources; the bucket bases remain outside Terraform state because an organization SCP denies the provider's Object Lock read
 - KMS customer-managed key and KMS-backed Secrets Manager secret
-- Application EC2 instance role scoped to document, KMS, and secret resources
-- CloudTrail, VPC Flow Logs, CloudWatch Logs, and IAM Access Analyzer
-- EventBridge, Lambda, SNS, and CloudWatch evidence recording
+- Existing `LabRole` / `LabInstanceProfile` referenced for an optional EC2 workload; no IAM roles are created
+- CloudTrail, VPC Flow Logs delivered directly to S3, and CloudWatch Logs
+- EventBridge-to-SNS findings notification with manual operator response
+- Local IaC policy scanning in place of IAM Access Analyzer
 
 See [architecture.md](docs/architecture.md) for the target design and [deployment.md](docs/deployment.md) for operations.
 
@@ -28,19 +29,18 @@ cd terraform/environments/dev
 terraform init
 terraform fmt -check
 terraform validate
-terraform plan
-terraform apply
+terraform plan -out=securecloudops.tfplan
 ```
 
-AWS Academy credentials must never be committed. Use environment variables or the AWS CLI credential process.
+Before planning the partially deployed stack, follow the state-preservation steps in [deployment.md](docs/deployment.md). Do not apply until the plan shows no unintended destroys. AWS Academy credentials must never be committed; use the AWS CLI credential process.
 
 ## Validate
 
 ```bash
-./security/check-capabilites.sh
+./scripts/check-capabilities.sh
 ```
 
-Complete the scenarios in [test-cases.md](security/test-cases.md). Record the observed values and any Academy permission limitations.
+Run the local IaC checks with `./scripts/validate-iac.sh`. Complete the scenarios in [test-cases.md](security/test-cases.md) and record permission limitations.
 
 ## Destroy
 
@@ -49,4 +49,4 @@ cd terraform/environments/dev
 terraform destroy
 ```
 
-Destroy only resources in this project account and region. Review S3 buckets and secrets before deletion, and do not use Object Lock unless it is part of an explicitly approved exercise.
+Destroy only after reviewing the plan and preserving any required state. The existing document and audit buckets are intentionally unmanaged by Terraform and will not be removed by this command.

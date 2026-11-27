@@ -75,72 +75,46 @@ The architecture is divided into six logical domains:
 
 ### 2.1 Architecture diagram
 
+The following is the permission-constrained Learner Lab deployment. EC2 is optional; the application workload is not created by the current baseline.
+
 ```mermaid
 flowchart TB
-    U["Enterprise Users"]
     OP["Security Operator"]
 
     subgraph AWS["AWS - us-east-1"]
-        subgraph NET["VPC - 10.20.0.0/16"]
-            ALB["Application Load Balancer"]
-            EC2["EC2 Application Tier"]
-            RDS["RDS Database"]
-
-            ALB --> EC2
-            EC2 --> RDS
-        end
-
-        S3["Private S3 Document Bucket"]
+        VPC["VPC - 10.20.0.0/16"]
+        EC2["Optional EC2 workload using LabInstanceProfile"]
+        DOCS["Existing private document bucket"]
+        AUDIT["Existing audit bucket"]
         KMS["AWS KMS"]
         SM["Secrets Manager"]
 
-        EC2 --> S3
+        EC2 --> DOCS
         EC2 --> SM
         EC2 --> KMS
-        RDS --> KMS
-        S3 --> KMS
 
         subgraph DET["Security Monitoring"]
             CT["CloudTrail"]
-            GD["GuardDuty"]
-            MAC["Macie"]
-            SH["Security Hub"]
-            CW["CloudWatch"]
-        end
-
-        subgraph IR["Incident Response"]
+            GD["GuardDuty - conditional"]
+            SH["Security Hub - conditional"]
             EB["EventBridge"]
-            L["Lambda Response Handler"]
-            SNS["SNS Notifications"]
+            SNS["SNS notifications"]
         end
 
-        AB["IAM Access Analyzer"]
-        BK["AWS Backup"]
-        GL["S3 Lifecycle / Glacier"]
+        CW["CloudWatch Logs"]
     end
 
-    U -->|"HTTPS"| ALB
-    OP -->|"Authorized administration"| AWS
-
-    NET -.->|"VPC Flow Logs"| CW
-    CT --> CW
-    GD --> SH
-    MAC --> SH
+    VPC -.->|"VPC Flow Logs direct to S3"| AUDIT
+    CT --> AUDIT
     GD --> EB
     SH --> EB
-    CW --> EB
-    EB --> L
-    L --> SNS
+    EB --> SNS
     SNS --> OP
 
-    S3 --> MAC
-    S3 --> GL
-    RDS --> BK
-    EC2 --> BK
-    AB -.->|"Access analysis"| AWS
+    EC2 --> CW
 ```
 
-The diagram describes logical relationships. It does not imply that every component will be deployed in the first implementation iteration.
+The existing S3 buckets are preserved but their base bucket resources are not managed by Terraform because the organization SCP denies the provider's Object Lock configuration read. Terraform continues to manage supported bucket security subresources and bucket policies.
 
 ---
 
@@ -176,7 +150,7 @@ The actual Availability Zone names will be discovered dynamically by Terraform.
 - Subnet associations.
 - Security Groups.
 - Network ACLs where justified.
-- VPC Flow Logs.
+- VPC Flow Logs delivered directly to the existing audit S3 bucket; no custom IAM delivery role.
 
 ### 3.4 Network security rules
 
@@ -216,33 +190,17 @@ All access must follow least privilege.
 The project uses:
 
 - AWS Academy temporary credentials for the deployment operator.
-- AWS IAM roles for application workloads.
-- Dedicated IAM roles for Lambda response automation.
+- The pre-provisioned `LabRole` and `LabInstanceProfile` when an EC2 workload is explicitly enabled.
 - AWS STS temporary credentials.
-- IAM policies scoped to required resources and actions.
-- IAM Access Analyzer to identify unintended external access.
+- Local Terraform/IaC policy checks instead of IAM Access Analyzer.
 
 No permanent AWS access keys will be embedded in application code or Terraform configuration.
 
-### 4.2 Workload identities
+The deployment must not create IAM roles or instance profiles. The lab's `LabRole` and `LabInstanceProfile` have been verified to exist; the role trust policy allows EC2 and Lambda, and the caller's simulated `iam:PassRole` decision is allowed. The role is not trusted by the VPC Flow Logs service. Reusing the role does not make it least-privilege; do not attach it to a workload until the workload's required permissions and the role's broad lab permissions have been reviewed.
 
-**Application EC2 role**
+### 4.2 Workload identity limitation
 
-Permissions should be limited to:
-- Read and write authorized document objects in the designated S3 bucket.
-- Retrieve the required application secret.
-- Use the designated KMS key for permitted cryptographic operations.
-- Interact with explicitly authorized AWS resources.
-
-**Incident response Lambda role**
-
-Permissions should be limited to:
-- Read the required security event.
-- Write incident processing logs.
-- Publish notifications.
-- Perform explicitly authorized containment operations when that feature is enabled.
-
-The Lambda function must not receive administrator permissions.
+The current baseline creates no EC2 workload. A future test instance may reference `LabInstanceProfile` without creating or changing IAM resources. Its permissions are controlled by the Academy and are not equivalent to a dedicated least-privilege application role.
 
 ---
 
@@ -250,7 +208,7 @@ The Lambda function must not receive administrator permissions.
 
 ### 5.1 Amazon S3
 
-The document-management platform uses a private S3 bucket.
+The document-management platform uses the existing private S3 document bucket and audit bucket. The bucket bases are preserved outside Terraform state because an organization SCP denies `s3:GetBucketObjectLockConfiguration`, which the provider calls while refreshing `aws_s3_bucket`. Terraform manages supported security subresources and bucket policies separately.
 
 Security configuration:
 
@@ -260,7 +218,7 @@ Security configuration:
 - HTTPS-only bucket access.
 - Restricted bucket policies.
 - Application role access limited to the required bucket and prefixes.
-- S3 Object Lock as an optional retention control.
+- S3 Object Lock is excluded because its configuration API is explicitly denied.
 - Lifecycle policies for archival.
 
 ### 5.2 KMS
@@ -298,11 +256,9 @@ Macie deployment is conditional on Academy permissions and service costs.
 
 ### 5.5 S3 Object Lock and Glacier
 
-S3 Object Lock demonstrates retention and protection against object deletion or modification.
+S3 Object Lock is excluded from the Learner Lab deployment because the organization SCP denies the provider's Object Lock configuration read. Do not configure Object Lock or attempt to work around the SCP.
 
-The initial design should use a carefully scoped retention policy. Object Lock configuration must be decided when the bucket is created.
-
-S3 Lifecycle rules can transition eligible objects to an Amazon S3 Glacier storage class.
+S3 Glacier lifecycle transitions remain a conditional enhancement and require a separate cost and permission review.
 
 ---
 
@@ -316,13 +272,13 @@ Security requirements:
 
 - Deployed in the private application subnet.
 - Encrypted EBS storage.
-- IAM instance role.
+- The pre-provisioned `LabInstanceProfile` only after a permission review.
 - Restricted Security Group.
 - No SSH from the public internet.
 - Centralized application logging.
 - Administrative access through an authorized management channel where available.
 
-The initial deployment can use a single test instance. The target architecture supports multiple application instances across two Availability Zones.
+No EC2 instance is included in the baseline. A single test instance is a later conditional step; the Learner Lab profile is broader than a dedicated application role.
 
 ### 6.2 Amazon RDS
 
@@ -373,10 +329,10 @@ CloudWatch provides centralized observability.
 It receives or monitors:
 - Application logs.
 - EC2 operating metrics.
-- VPC Flow Logs.
 - CloudTrail events where configured.
-- Lambda execution logs.
 - Security-related alarms.
+
+VPC Flow Logs are delivered directly to S3 to avoid creating a CloudWatch delivery role.
 
 ### 7.3 Amazon GuardDuty
 
@@ -394,11 +350,11 @@ Security Hub provides a centralized view of supported security findings.
 
 It is used to consolidate and review security information from integrated AWS services.
 
-### 7.5 IAM Access Analyzer
+### 7.5 Local IaC policy checks
 
-Access Analyzer checks for unintended resource access and external sharing.
+IAM Access Analyzer is excluded because the Learner Lab denies its tagging operation.
 
-It is part of the identity and resource exposure assessment process.
+Use local Terraform validation and a Terraform security scanner (for example, Checkov) to inspect infrastructure configuration. Record the scanner version and findings with the validation evidence. These checks do not replace account-level external access analysis.
 
 ### 7.6 Amazon Macie
 
@@ -415,41 +371,35 @@ The response pipeline uses:
 - GuardDuty.
 - Security Hub.
 - Amazon EventBridge.
-- AWS Lambda.
 - Amazon SNS.
-- CloudWatch Logs.
 
 Workflow:
 
 1. A monitored AWS service generates a security finding.
 2. EventBridge receives the matching event.
-3. EventBridge invokes the response Lambda function.
-4. Lambda validates and parses the finding.
-5. The finding is classified using severity and resource context.
-6. The response is recorded in CloudWatch Logs.
-7. A notification is sent through SNS.
-8. The security operator reviews and determines the next action.
+3. EventBridge publishes the event directly to the SNS topic.
+4. The security operator reviews and classifies the finding manually.
 
 ### 8.2 Initial response mode
 
-The first implementation uses **notification and evidence recording only**.
+The implementation uses **notification and manual response only**. Lambda is not deployed because it requires an execution role.
 
 This avoids accidentally isolating legitimate resources or modifying critical infrastructure.
 
 ### 8.3 Optional controlled containment
 
-A later implementation may isolate a dedicated test EC2 instance by attaching a quarantine Security Group.
+A later implementation may isolate a dedicated test EC2 instance by attaching a quarantine Security Group, if the lab's existing role and permissions allow it.
 
 Containment requirements:
 
 - Only explicitly designated laboratory instances are eligible.
 - The target must carry the expected project and resource tags.
-- The Lambda role must have narrowly scoped permissions.
+- The existing lab role must be reviewed; it cannot be narrowed by this project.
 - The action must be logged.
 - The behavior must be reversible.
 - Automatic containment must be disabled by default.
 
-The response function must never delete resources, modify unrelated IAM policies, or disable security monitoring.
+Automated response is out of scope for the Learner Lab baseline. No function will delete resources, modify IAM policies, or disable security monitoring.
 
 ---
 
@@ -502,16 +452,9 @@ SecureCloudOps/
 │   └── modules/
 │       ├── networking/
 │       ├── identity/
-│       ├── compute/
-│       ├── data-protection/
-│       ├── database/
-│       ├── audit-logging/
-│       ├── threat-detection/
 │       ├── incident-response/
-│       └── backup/
-│
-├── lambda/
-│   └── incident-response/
+│       ├── monitoring/
+│       └── storage/
 │
 ├── security/
 │   ├── environment.md
@@ -545,8 +488,10 @@ SecureCloudOps/
 - Keep state local until an appropriate remote backend is verified and configured.
 - Use common resource tags.
 - Document resource cleanup and retention exceptions.
+- Do not declare the existing S3 bucket bases as `aws_s3_bucket` resources; the organization SCP denies the Object Lock configuration read Terraform performs during refresh.
+- Back up local state before removing only the two base bucket addresses from Terraform state. This preserves the AWS buckets; it does not delete them.
 
-The AWS Academy execution role is treated as an externally supplied identity. Terraform will not attempt to replace or administer that role.
+The AWS Academy execution role and instance profile are externally supplied. Terraform reads `LabInstanceProfile` and never creates, replaces, or administers IAM roles.
 
 ---
 
@@ -556,9 +501,9 @@ The architecture covers the following services from the course.
 
 | AWS service | Architectural role | Priority |
 |---|---|---|
-| IAM | Access management | Core |
+| IAM | Pre-provisioned lab identity | Conditional |
 | STS | Temporary credentials | Core |
-| IAM Access Analyzer | External access assessment | Core |
+| IAM Access Analyzer | External access assessment | Excluded (tag permission denied) |
 | VPC | Network isolation | Core |
 | EC2 | Application workload | Core |
 | EBS | Workload storage | Core |
@@ -568,7 +513,7 @@ The architecture covers the following services from the course.
 | CloudTrail | API auditing | Core |
 | CloudWatch | Monitoring and logging | Core |
 | EventBridge | Security event routing | Core |
-| Lambda | Response automation | Core |
+| Lambda | Response automation | Excluded (execution role unavailable) |
 | GuardDuty | Threat detection | Conditional |
 | Security Hub | Centralized findings | Conditional |
 | Macie | Sensitive data discovery | Conditional |
@@ -607,7 +552,7 @@ These exclusions are architectural choices, not claims that the services are una
 - Terraform environment.
 - VPC and subnet architecture.
 - Security Groups and route tables.
-- IAM workload roles where permitted.
+- Reference the existing Academy instance profile only if an EC2 test workload is enabled.
 - KMS foundations.
 - CloudTrail.
 - VPC Flow Logs.
@@ -628,16 +573,13 @@ These exclusions are architectural choices, not claims that the services are una
 - GuardDuty.
 - Security Hub.
 - Macie.
-- IAM Access Analyzer.
+- Local Terraform policy scanning.
 - EventBridge rules.
 
 ### Phase 4 - Automated response
 
-- Lambda response processor.
-- Event validation and severity classification.
-- Evidence logging.
-- SNS notification.
-- Optional controlled quarantine.
+- EventBridge-to-SNS notification.
+- Manual finding classification and response.
 
 ### Phase 5 - Backup and validation
 
@@ -664,9 +606,9 @@ The final project must demonstrate security controls through tests, not just res
 | SC-04 | Inspect S3 encryption configuration | KMS encryption confirmed |
 | SC-05 | Inspect EC2 storage configuration | EBS encryption confirmed |
 | SC-06 | Generate a controlled security test event | Finding is processed |
-| SC-07 | Trigger an EventBridge rule | Lambda is invoked |
-| SC-08 | Process a simulated security finding | Finding is logged and notification sent |
-| SC-09 | Inspect externally accessible resources | Access Analyzer findings reviewed |
+| SC-07 | Trigger an EventBridge rule with a synthetic event | SNS topic receives the event |
+| SC-08 | Review a simulated security finding | Operator receives the notification and records a manual disposition |
+| SC-09 | Inspect IaC for insecure settings | Local Terraform security scanner results are reviewed |
 | SC-10 | Restore a protected workload resource | Restored resource is validated |
 
 Tests must be performed only against resources in the designated project environment.
@@ -695,14 +637,16 @@ The architecture must be adapted when a capability is unavailable, but alternati
 | ADR-002 | Use `us-east-1` | Selected project region |
 | ADR-003 | Use AWS Academy | Educational deployment environment |
 | ADR-004 | Model a document-management workload | Coherent scenario for multiple security domains |
-| ADR-005 | Use IAM roles and temporary credentials | Least privilege and reduced secret exposure |
+| ADR-005 | Reuse the pre-provisioned LabRole only when needed | IAM role creation is denied; the role is broad and must be reviewed |
 | ADR-006 | Use EC2 and RDS as the primary application stack | Explicit workload and database security controls |
 | ADR-007 | Use S3 and KMS for document protection | Central data protection mechanism |
-| ADR-008 | Use EventBridge and Lambda for response automation | Event-driven security operations |
+| ADR-008 | Route EventBridge findings directly to SNS | Lambda execution-role creation is unavailable; operator response stays manual |
 | ADR-009 | Begin with notification-only response | Avoid unsafe automatic containment |
 | ADR-010 | Avoid NAT Gateway by default | Control laboratory costs |
 | ADR-011 | Separate target architecture from lab deployment | Preserve architectural intent despite Academy limitations |
 | ADR-012 | Require validation before claiming a control works | Evidence-based security testing |
+| ADR-013 | Preserve existing S3 bucket bases outside Terraform state | The SCP explicitly denies the Object Lock API call made by `aws_s3_bucket` refresh |
+| ADR-014 | Replace Access Analyzer with local IaC scanning | The lab denies Access Analyzer tagging |
 
 ---
 
@@ -712,7 +656,7 @@ SecureCloudOps is complete when:
 
 - The implemented infrastructure can be reproduced using Terraform.
 - The network and workload boundaries are documented and validated.
-- IAM access is scoped to the required resources.
+- IAM resources are not created by the project; any reused lab role is reviewed and documented.
 - Data storage and encryption controls are tested.
 - Relevant AWS activity is logged.
 - Available detection services are configured and tested.

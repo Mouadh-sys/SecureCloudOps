@@ -1,5 +1,7 @@
 data "aws_caller_identity" "current" {}
 
+data "aws_region" "current" {}
+
 data "aws_iam_policy_document" "cloudtrail_bucket" {
   statement {
     sid    = "AWSCloudTrailAclCheck"
@@ -11,7 +13,6 @@ data "aws_iam_policy_document" "cloudtrail_bucket" {
     actions   = ["s3:GetBucketAcl"]
     resources = [var.audit_bucket_arn]
   }
-
   statement {
     sid    = "AWSCloudTrailWrite"
     effect = "Allow"
@@ -27,6 +28,53 @@ data "aws_iam_policy_document" "cloudtrail_bucket" {
       test     = "StringEquals"
       variable = "s3:x-amz-acl"
       values   = ["bucket-owner-full-control"]
+    }
+  }
+
+  statement {
+    sid    = "VpcFlowLogsAclCheck"
+    effect = "Allow"
+    principals {
+      type        = "Service"
+      identifiers = ["delivery.logs.amazonaws.com"]
+    }
+    actions   = ["s3:GetBucketAcl"]
+    resources = [var.audit_bucket_arn]
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
+    condition {
+      test     = "ArnLike"
+      variable = "aws:SourceArn"
+      values   = ["arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:*"]
+    }
+  }
+
+  statement {
+    sid    = "VpcFlowLogsWrite"
+    effect = "Allow"
+    principals {
+      type        = "Service"
+      identifiers = ["delivery.logs.amazonaws.com"]
+    }
+    actions   = ["s3:PutObject"]
+    resources = ["${var.audit_bucket_arn}/flowlogs/AWSLogs/${data.aws_caller_identity.current.account_id}/*"]
+    condition {
+      test     = "StringEquals"
+      variable = "s3:x-amz-acl"
+      values   = ["bucket-owner-full-control"]
+    }
+    condition {
+      test     = "StringEquals"
+      variable = "aws:SourceAccount"
+      values   = [data.aws_caller_identity.current.account_id]
+    }
+    condition {
+      test     = "ArnLike"
+      variable = "aws:SourceArn"
+      values   = ["arn:aws:logs:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:*"]
     }
   }
 }
@@ -54,45 +102,13 @@ resource "aws_cloudwatch_log_group" "flow_logs" {
   tags              = merge(var.tags, { Module = "monitoring" })
 }
 
-data "aws_iam_policy_document" "flow_logs_assume" {
-  statement {
-    actions = ["sts:AssumeRole"]
-    principals {
-      type        = "Service"
-      identifiers = ["vpc-flow-logs.amazonaws.com"]
-    }
-  }
-}
-
-resource "aws_iam_role" "flow_logs" {
-  name               = "SecureCloudOps-${var.environment}-VpcFlowLogs"
-  assume_role_policy = data.aws_iam_policy_document.flow_logs_assume.json
-  tags               = merge(var.tags, { Module = "monitoring" })
-}
-
-resource "aws_iam_role_policy" "flow_logs" {
-  name = "SecureCloudOps-${var.environment}-VpcFlowLogsPolicy"
-  role = aws_iam_role.flow_logs.id
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = [
-        "logs:CreateLogStream",
-        "logs:PutLogEvents",
-        "logs:DescribeLogGroups",
-        "logs:DescribeLogStreams"
-      ]
-      Resource = "${aws_cloudwatch_log_group.flow_logs.arn}:*"
-    }]
-  })
-}
-
 resource "aws_flow_log" "vpc" {
-  iam_role_arn    = aws_iam_role.flow_logs.arn
-  log_destination = aws_cloudwatch_log_group.flow_logs.arn
-  traffic_type    = "ALL"
-  vpc_id          = var.vpc_id
+  log_destination      = "${var.audit_bucket_arn}/flowlogs"
+  log_destination_type = "s3"
+  traffic_type         = "ALL"
+  vpc_id               = var.vpc_id
+
+  depends_on = [aws_s3_bucket_policy.cloudtrail]
 }
 
 resource "aws_cloudtrail" "this" {
@@ -108,8 +124,3 @@ resource "aws_cloudtrail" "this" {
   tags = merge(var.tags, { Module = "monitoring" })
 }
 
-resource "aws_accessanalyzer_analyzer" "this" {
-  analyzer_name = "securecloudops-${var.environment}"
-  type          = "ACCOUNT"
-  tags          = merge(var.tags, { Module = "monitoring" })
-}

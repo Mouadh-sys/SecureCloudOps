@@ -1,7 +1,7 @@
 output "application_role_arn" {
-  value = aws_iam_role.application.arn
+  value = data.aws_iam_instance_profile.application.role_arn
 }
 
 output "application_instance_profile_name" {
-  value = aws_iam_instance_profile.application.name
+  value = data.aws_iam_instance_profile.application.name
 }
