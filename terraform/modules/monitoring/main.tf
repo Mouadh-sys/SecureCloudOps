@@ -20,7 +20,9 @@ data "aws_iam_policy_document" "cloudtrail_bucket" {
       identifiers = ["cloudtrail.amazonaws.com"]
     }
     actions   = ["s3:PutObject"]
-    resources = ["${var.audit_bucket_arn}/AWSLogs/${data.aws_caller_identity.current.account_id}/*"]
+    resources = [
+      "${var.audit_bucket_arn}/cloudtrail/AWSLogs/${data.aws_caller_identity.current.account_id}/*"
+    ]
     condition {
       test     = "StringEquals"
       variable = "s3:x-amz-acl"
