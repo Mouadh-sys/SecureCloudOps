@@ -20,6 +20,7 @@ override.tf.json
 # Python
 __pycache__/
 *.py[cod]
+.venv/
 
 # Generated Lambda package
 /terraform/modules/incident-response/incident-response.zip

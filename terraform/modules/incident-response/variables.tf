@@ -7,6 +7,10 @@ variable "log_retention_days" {
   default = 30
 }
 
+variable "kms_key_arn" {
+  type = string
+}
+
 variable "tags" {
   type    = map(string)
   default = {}

@@ -75,23 +75,31 @@ The architecture is divided into six logical domains:
 
 ### 2.1 Architecture diagram
 
-The following is the permission-constrained Learner Lab deployment. EC2 is optional; the application workload is not created by the current baseline.
+The Terraform configuration now includes a small synthetic read-only web workload, but it has not been applied. Deployment stops until the operator supplies a client CIDR and an issued ACM certificate. RDS remains a separate cost-gated future addition.
 
 ```mermaid
-flowchart TB
-    OP["Security Operator"]
+flowchart LR
+    CLIENT["Authorized client CIDR"]
 
     subgraph AWS["AWS - us-east-1"]
-        VPC["VPC - 10.20.0.0/16"]
-        EC2["Optional EC2 workload using LabInstanceProfile"]
-        DOCS["Existing private document bucket"]
+        ALB["Internet-facing ALB<br/>HTTPS 443"]
+        APP1["scops-app-01<br/>Private AZ 1"]
+        APP2["scops-app-02<br/>Private AZ 2"]
+        SEC["scops-sec-01<br/>Private management subnet<br/>SSM only"]
+        EP["SSM / CloudWatch Logs<br/>Interface endpoints"]
+        S3EP["S3 Gateway Endpoint<br/>bootstrap downloads"]
         AUDIT["Existing audit bucket"]
         KMS["AWS KMS"]
-        SM["Secrets Manager"]
 
-        EC2 --> DOCS
-        EC2 --> SM
-        EC2 --> KMS
+        CLIENT --> ALB
+        ALB --> APP1
+        ALB --> APP2
+        SEC --> APP1
+        APP1 --> EP
+        APP2 --> EP
+        SEC --> EP
+        S3EP --> APP1
+        S3EP --> APP2
 
         subgraph DET["Security Monitoring"]
             CT["CloudTrail"]
@@ -104,14 +112,15 @@ flowchart TB
         CW["CloudWatch Logs"]
     end
 
-    VPC -.->|"VPC Flow Logs direct to S3"| AUDIT
+    APP1 --> CW
+    APP2 --> CW
+    ALB --> CW
+    FLOW["VPC Flow Logs"] --> AUDIT
     CT --> AUDIT
     GD --> EB
     SH --> EB
     EB --> SNS
-    SNS --> OP
-
-    EC2 --> CW
+    CW --> SNS
 ```
 
 The existing S3 buckets are preserved but their base bucket resources are not managed by Terraform because the organization SCP denies the provider's Object Lock configuration read. Terraform continues to manage supported bucket security subresources and bucket policies.
@@ -139,6 +148,7 @@ Create one dedicated VPC:
 | Application AZ-2 | `10.20.11.0/24` | Application workloads |
 | Database AZ-1 | `10.20.20.0/24` | Private database tier |
 | Database AZ-2 | `10.20.21.0/24` | Private database tier |
+| Management AZ-1 | `10.20.30.0/24` | Private SSM-managed defensive test host |
 
 The actual Availability Zone names will be discovered dynamically by Terraform.
 
@@ -160,9 +170,9 @@ The actual Availability Zone names will be discovered dynamically by Terraform.
 
 **Application tier**
 - Accept application traffic only from the load balancer Security Group.
+- Accept controlled TCP/8080 health validation only from the private security-test Security Group.
 - No direct public SSH access.
-- Access to the database only through the required database port.
-- Restrict access to AWS services through appropriate endpoints or controlled egress.
+- Egress is restricted to HTTPS via approved interface endpoints and the S3 Gateway Endpoint.
 
 **Database tier**
 - No public IP address.
@@ -175,7 +185,7 @@ Security Groups are the primary workload-level access control. Network ACLs prov
 
 A NAT Gateway will not be enabled by default in the Academy environment.
 
-The private workloads will use the minimum required connectivity, such as an S3 Gateway Endpoint and selected interface endpoints, where permitted and economically justified.
+The private workloads use an S3 Gateway Endpoint and SSM, SSM Messages, EC2 Messages, and CloudWatch Logs interface endpoints in both application AZs. These endpoints avoid NAT Gateway charges but still incur hourly and data-processing costs; review current prices before deployment.
 
 A full production deployment may require controlled outbound connectivity.
 
@@ -196,11 +206,11 @@ The project uses:
 
 No permanent AWS access keys will be embedded in application code or Terraform configuration.
 
-The deployment must not create IAM roles or instance profiles. The lab's `LabRole` and `LabInstanceProfile` have been verified to exist; the role trust policy allows EC2 and Lambda, and the caller's simulated `iam:PassRole` decision is allowed. The role is not trusted by the VPC Flow Logs service. Reusing the role does not make it least-privilege; do not attach it to a workload until the workload's required permissions and the role's broad lab permissions have been reviewed.
+The deployment must not create IAM roles or instance profiles. The lab's `LabRole` and `LabInstanceProfile` have been verified to exist; the role trust policy allows EC2 and Lambda, and the caller's simulated `iam:PassRole` decision is allowed. The role is not trusted by the VPC Flow Logs service. Reusing the role does not make it least-privilege; the included workload uses it only because role creation is unavailable. Its broad Academy-managed permissions remain a limitation.
 
 ### 4.2 Workload identity limitation
 
-The current baseline creates no EC2 workload. A future test instance may reference `LabInstanceProfile` without creating or changing IAM resources. Its permissions are controlled by the Academy and are not equivalent to a dedicated least-privilege application role.
+The workload configuration references `LabInstanceProfile` without creating or changing IAM resources. Its permissions are controlled by the Academy and are not equivalent to a dedicated least-privilege application role. Do not store application secrets on the instances; the current demo uses synthetic in-memory records and does not access Secrets Manager.
 
 ---
 
@@ -266,23 +276,23 @@ S3 Glacier lifecycle transitions remain a conditional enhancement and require a 
 
 ### 6.1 Amazon EC2
 
-EC2 hosts the document-management application.
+Two EC2 nodes host the synthetic, read-only document-inventory demo. A third optional EC2 node provides a private defensive validation host.
 
 Security requirements:
 
-- Deployed in the private application subnet.
+- Application nodes are deployed one per private application subnet across two AZs.
+- The validation host is deployed in `10.20.30.0/24` and managed through Systems Manager Session Manager only.
 - Encrypted EBS storage.
-- The pre-provisioned `LabInstanceProfile` only after a permission review.
-- Restricted Security Group.
-- No SSH from the public internet.
-- Centralized application logging.
-- Administrative access through an authorized management channel where available.
+- The pre-provisioned `LabInstanceProfile`; no custom IAM roles or SSH keys.
+- IMDSv2 required and no public IP on any instance.
+- Application ingress only from the ALB and the isolated validation host.
+- Centralized application logging through the CloudWatch agent.
 
-No EC2 instance is included in the baseline. A single test instance is a later conditional step; the Learner Lab profile is broader than a dedicated application role.
+The web demo exposes `/`, `/health`, and `/api/documents`; all records are synthetic and all write methods are rejected. The public ALB listener requires HTTPS and is restricted to a manually supplied client IPv4 CIDR. The workload is not deployed until an ACM certificate ARN is supplied.
 
-### 6.2 Amazon RDS
+### 6.2 Amazon RDS (not implemented)
 
-RDS stores structured application metadata, such as:
+RDS is a possible future tier for structured application metadata, such as:
 
 - Document identifiers.
 - Document names.
@@ -291,7 +301,7 @@ RDS stores structured application metadata, such as:
 - Creation timestamps.
 - Ownership and access metadata.
 
-Security requirements:
+If added after cost and permission review, it must meet these requirements:
 
 - Private database subnets.
 - Public accessibility disabled.
@@ -300,9 +310,11 @@ Security requirements:
 - Network access restricted to the application tier.
 - Backup policy attached through AWS Backup.
 
+No RDS instance or database connection is included in the current workload. The demo remains stateless and read-only; the existing database subnets and Security Group are reserved for a future implementation.
+
 ### 6.3 AWS Certificate Manager
 
-ACM supplies the TLS certificate used by the public-facing load balancer.
+ACM supplies the TLS certificate used by the public-facing load balancer. The operator must request and DNS-validate a certificate in `us-east-1`; Terraform consumes its ARN and does not create or validate domain ownership.
 
 ACM Private CA is not included in the initial implementation because it introduces additional complexity and cost without being necessary for the project's core scenario.
 
@@ -518,8 +530,8 @@ The architecture covers the following services from the course.
 | Security Hub | Centralized findings | Conditional |
 | Macie | Sensitive data discovery | Conditional |
 | RDS | Relational data storage | Conditional |
-| ACM | TLS certificate management | Conditional |
-| S3 Object Lock | Retention protection | Conditional |
+| ACM | TLS certificate for the HTTPS ALB | Manual prerequisite |
+| S3 Object Lock | Retention protection | Excluded (explicit SCP deny) |
 | S3 Glacier | Long-term archival | Conditional |
 | AWS Backup | Backup and restore | Conditional |
 | Backup Audit Manager | Backup compliance assessment | Conditional |
@@ -552,20 +564,21 @@ These exclusions are architectural choices, not claims that the services are una
 - Terraform environment.
 - VPC and subnet architecture.
 - Security Groups and route tables.
-- Reference the existing Academy instance profile only if an EC2 test workload is enabled.
+- Reference the existing Academy instance profile; do not create IAM roles.
 - KMS foundations.
 - CloudTrail.
 - VPC Flow Logs.
 
 ### Phase 2 - Workload and data protection
 
-- EC2 test workload.
+- Two private application EC2 nodes, HTTPS ALB, and SSM-only validation host.
 - EBS encryption.
 - S3 document bucket.
 - KMS encryption.
 - Secrets Manager.
 - RDS if available.
-- ACM and load balancer if justified.
+- ACM certificate supplied manually before ALB deployment.
+- RDS only after cost review and a database-backed application design.
 
 ### Phase 3 - Security monitoring
 

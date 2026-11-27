@@ -42,3 +42,18 @@ output "security_topic_arn" {
   description = "SNS topic for security findings"
   value       = module.incident_response.sns_topic_arn
 }
+
+output "application_load_balancer_dns_name" {
+  description = "Public DNS name of the HTTPS application load balancer"
+  value       = module.workload.load_balancer_dns_name
+}
+
+output "application_instance_ids" {
+  description = "EC2 instance IDs for the private application nodes"
+  value       = module.workload.application_instance_ids
+}
+
+output "security_test_instance_id" {
+  description = "EC2 instance ID for the private defensive validation host, if enabled"
+  value       = module.workload.security_test_instance_id
+}
