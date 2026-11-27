@@ -52,6 +52,21 @@ terraform validate
 terraform plan -out=securecloudops.tfplan
 ```
 
+### Switching to a different AWS account
+
+Do not refresh an existing account's state with credentials for a different account. Confirm the active identity with `aws sts get-caller-identity`, then create and select an account-specific local workspace to keep its state separate; replace `ACCOUNT_ID` below with the 12-digit AWS account ID:
+
+```bash
+terraform workspace list
+terraform workspace new learner-lab-ACCOUNT_ID
+terraform workspace show
+terraform plan -out=securecloudops-new-account.tfplan
+```
+
+Keep the original workspace and its state intact. Review the new-account plan carefully before applying; a fresh workspace will propose creating the infrastructure again.
+
+The storage module manages settings for existing S3 buckets but does not create the bucket bases. In a new account, manually create `securecloudops-documents-<account-id>-dev` and `securecloudops-audit-<account-id>-dev` in `us-east-1`, with S3 Block Public Access enabled and Object Lock disabled. Terraform will configure versioning, encryption, and the remaining bucket controls after the buckets exist.
+
 ### Preserve the partial deployment before planning
 
 The previous apply created resources, including two S3 buckets, but failed because the organization SCP denies `s3:GetBucketObjectLockConfiguration`. Terraform's S3 bucket resource calls this API during refresh. Preserve the buckets and remove only their base resource entries from Terraform state; this does not delete AWS resources.
